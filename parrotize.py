@@ -223,7 +223,7 @@ def main():
 
     im = Image.open(args.source_file)
 
-    # Compute rainbox colors
+    # Compute rainbow colors
     hues = np.linspace(0, 360, num=args.frames, endpoint=False)
 
     # Compute perspective transform coefficients
