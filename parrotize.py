@@ -205,9 +205,9 @@ def parrotize(im, hue, coeffs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--frames', type=int, default=10,
+    parser.add_argument('--frames', type=int, default=25,
                         help='Number of frames in output file')
-    parser.add_argument('--time', type=int, default=1000,
+    parser.add_argument('--time', type=int, default=500,
                         help='Duration of animation in milliseconds')
     parser.add_argument('source_file', help='Source image')
     parser.add_argument('target_file', help='Target image')
