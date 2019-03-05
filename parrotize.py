@@ -1,35 +1,17 @@
 #!/usr/bin/env python3
 
 import argparse
+import itertools
 import math
 import sys
 
 import numpy as np
 
-from PIL import Image
 from scipy.interpolate import splprep, splev
+from wand.image import Image
 
 
-def get_perspective_transform_coeffs(p_src, p_dest):
-    '''
-    Get coefficients for a perspective transformation from `p_src` to `p_dest`.
-
-    https://stackoverflow.com/questions/14177744/how-does-perspective-transformation-work-in-pil
-    https://web.archive.org/web/20150222120106/xenia.media.mit.edu/~cwren/interpolator/
-    '''
-    matrix = []
-    for (X, Y), (x, y) in zip(p_src, p_dest):
-        matrix.append([x, y, 1, 0, 0, 0, -X * x, -X * y])
-        matrix.append([0, 0, 0, x, y, 1, -Y * x, -Y * y])
-
-    A = np.matrix(matrix, dtype=np.float)
-    B = np.array(p_src).reshape(8)
-
-    result = np.linalg.solve(A, B)
-    return np.array(result).reshape(8)
-
-
-def get_perspective_transform_bounds(grid_size, top_midpt):
+def get_perspective_transform(grid_size, top_midpt):
     '''
     Compute perspective transform boundaries. The midpoint of the top of the
     image will be moved to `top_midpt`. The top two corners will have the same
@@ -53,28 +35,21 @@ def get_perspective_transform_bounds(grid_size, top_midpt):
     elif d > 0:
         tl = (tl[0] + ed_ratio * d, tl[1])
 
+    # Source coordinate, followed by destination coordinate
     return (
-        tl,
-        tr,
-        (grid_size[0] - 1, grid_size[1] - 1),
-        (0, grid_size[1] - 1),
+        # Top left
+        0, 0,
+        tl[0], tl[1],
+        # Top right
+        grid_size[0] - 1, 0,
+        tr[0], tr[1],
+        # Bottom right
+        grid_size[0] - 1, grid_size[1] - 1,
+        grid_size[0] - 1, grid_size[1] - 1,
+        # Bottom left
+        0, grid_size[1] - 1,
+        0, grid_size[1] - 1,
     )
-
-
-def get_perspective_transform(grid_size, top_midpt):
-    '''
-    Get perspective transform coefficients for parrot head movement.
-    '''
-
-    src = (
-        (0, 0),
-        (grid_size[0] - 1, 0),
-        (grid_size[0] - 1, grid_size[1] - 1),
-        (0, grid_size[1] - 1),
-    )
-    dest = get_perspective_transform_bounds(grid_size, top_midpt)
-
-    return get_perspective_transform_coeffs(src, dest)
 
 
 def pick_equally_spaced(pts, n, endpoint=False):
@@ -169,38 +144,24 @@ def get_parrot_animation_points(grid_size, n):
     return interp_pts_norm
 
 
-def parrotize(im, hue, coeffs):
+def parrotize(im, hue, ptransform):
     '''
     Parrotize the specified image by change the hue to `hue` and doing a
-    perspective transform with coefficients `coeffs`.
+    perspective transform with the quadrilateral mapping in `ptransform`.
+    The `im` image will be modified in place.
     '''
 
     assert 0 <= hue < 360
 
-    alpha_channel = im.split()[-1] if im.mode == 'RGBA' else None
-    hsv_im = im.convert('HSV')
-    hsv_px = np.array(hsv_im)
+    # Convert to HSV and keep it in that color space. ImageMagick preserves the
+    # alpha channel and will use it when saving the image.
+    im.transform_colorspace('hsv')
 
-    # Colorize
-    hsv_px[:, :, 0] = round(hue / 360 * 256)
+    # 'red' == hue channel
+    hue_value = hue / 360 * im.quantum_range
+    im.evaluate(operator='set', value=hue_value, channel='red')
 
-    new_im = Image.fromarray(hsv_px, 'HSV').convert('RGB')
-    if alpha_channel:
-        new_im.putalpha(alpha_channel)
-
-        rgba_px = np.array(new_im)
-        clamp_val = (35, 35, 35, 255)
-
-        # Clamp minimum opaque RGB value to 35 to prevent RGB -> indexed
-        # conversion from treating dark colors as transparent
-        rgba_px[((rgba_px < clamp_val) ==
-                (True, True, True, False)).all(axis=2)] = clamp_val
-
-        # Convert to indexed color here because, for some reason, having the
-        # GIF writer do it results in weird artifacts
-        new_im = Image.fromarray(rgba_px, 'RGBA').convert('RGB').convert('P')
-
-    return new_im.transform(im.size, Image.PERSPECTIVE, coeffs, Image.BICUBIC)
+    im.distort('perspective', ptransform)
 
 
 def main():
@@ -221,24 +182,32 @@ def main():
 
     print('Frame duration: %dms\n' % (frame_duration // 10 * 10))
 
-    im = Image.open(args.source_file)
-
     # Compute rainbow colors
     hues = np.linspace(0, 360, num=args.frames, endpoint=False)
 
-    # Compute perspective transform coefficients
-    frame_coeffs = []
-    for pt in get_parrot_animation_points(im.size, args.frames):
-        frame_coeffs.append(get_perspective_transform(im.size, pt))
+    with Image(filename=args.source_file) as im:
+        print(im)
+        print(im.size)
 
-    frames = []
+        # Compute perspective transform mapping
+        ptransforms = []
+        for pt in get_parrot_animation_points(im.size, args.frames):
+            ptransforms.append(get_perspective_transform(im.size, pt))
 
-    for hue, coeffs in zip(hues, frame_coeffs):
-        print('Processing frame #%d' % len(frames))
-        frames.append(parrotize(im, hue, coeffs))
+        with Image() as im_out:
+            for i, hue, ptransform in zip(itertools.count(), hues, ptransforms):
+                print('Processing frame #%d' % i)
+                with im.clone() as im_frame:
+                    im_frame.dispose = 'background'
+                    im_frame.virtual_pixel = 'transparent'
 
-    frames[0].save(args.target_file, save_all=True, append_images=frames[1:],
-                   duration=frame_duration, loop=0, transparency=0, disposal=2)
+                    parrotize(im_frame, hue, ptransform)
+
+                    im_out.sequence.append(im_frame)
+                    im_out.sequence[i].delay = frame_duration // 10
+
+            im_out.type = 'optimize'
+            im_out.save(filename=args.target_file)
 
 
 if __name__ == '__main__':
