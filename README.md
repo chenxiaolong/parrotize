@@ -6,30 +6,17 @@ A Python script to party-parrotize any image.
 Dependencies
 ------------
 
-Parrotize depends on the ImageMagick native library to run. It can be installed via the following commands.
+Parrotize depends on the ImageMagick native library to run. It can be installed via the OS's package manager.
 
-### macOS
+Note that version 7 is required. Version 6 will produce output files with some single-color blocky artifacts. If you're on Linux and your distro does not package version 7, the official AppImage can be used.
 
-```sh
-brew install imagemagick
-```
+First, download the AppImage from: https://imagemagick.org/script/download.php
 
-### Fedora
+Then, extract it and set the `MAGICK_HOME` environment variable to point to the extracted files.
 
-```sh
-sudo dnf install ImageMagick
-```
-
-### RHEL-based distros
-
-```sh
-sudo yum install ImageMagick
-```
-
-### Debian-based distros
-
-```sh
-sudo apt install imagemagick
+```bash
+./magick --appimage-extract
+export MAGICK_HOME=$(pwd)/squashfs-root/usr
 ```
 
 Usage
